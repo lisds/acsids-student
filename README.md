@@ -1,3 +1,4 @@
-# Resources for Advanced Case Studies ...
+# Materials for LIS Advanced Case Studies course
 
-at LIS.
+These are materials for the Advanced Case Studies in Data Science and Machine
+Learning course at the London Interdisciplinary School.
