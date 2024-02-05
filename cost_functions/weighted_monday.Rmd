@@ -1,0 +1,596 @@
+---
+jupyter:
+  jupytext:
+    notebook_metadata_filter: all,-language_info
+    split_at_heading: true
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.16.0
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+  orphan: true
+---
+
+# Fitting models with different cost functions
+
+This is the notebook from the Thursday morning class.
+
+```{python}
+import numpy as np
+np.set_printoptions(suppress=True)
+from scipy.optimize import minimize
+import pandas as pd
+pd.set_option('mode.copy_on_write', True)
+import statsmodels.formula.api as smf
+import sklearn.linear_model as sklm
+import sklearn.metrics as skmetrics
+```
+
+```{python}
+df = pd.read_csv('data/rate_my_course.csv')
+#MB To make it easier to run Statsmodels, in particular.
+df = df.rename(columns={'Overall Quality': 'Quality'})
+df
+```
+
+Fetch some columns of interest:
+
+```{python}
+# This will be our y (the variable we predict).
+helpfulness = df['Helpfulness']
+# One of both of these will be our X (the predictors).
+clarity_easiness = df[['Clarity', 'Easiness']]
+```
+
+Fit the model with Statsmodels.
+
+```{python}
+model = smf.ols('Helpfulness ~ Clarity + Easiness', data=df)
+sm_fit = model.fit()
+sm_fit.summary()
+```
+
+Fit the same model with Scikit-learn.
+
+```{python}
+sk_model = sklm.LinearRegression()
+sk_fit = sk_model.fit(clarity_easiness, helpfulness)
+sk_fit
+```
+
+The coefficients (the slopes for the regressors):
+
+```{python}
+sk_fit.coef_
+```
+
+The intercept:
+
+```{python}
+sk_fit.intercept_
+```
+
+Compare the parameters to Statsmodels:
+
+
+```{python}
+sm_fit.params
+```
+
+## The fitted values and Scikit-learn
+
+The values predicted by the (Sklearn) model:
+
+```{python}
+y_hat = sk_fit.predict(clarity_easiness)
+y_hat
+```
+
+Compare to Statsmodels:
+
+```{python}
+sm_y_hat = sm_fit.predict()
+sm_y_hat
+```
+
+```{python}
+assert np.allclose(y_hat, sm_y_hat)
+```
+
+We assemble Sklearn's coefficients and intercept into a single list, with the
+intercept last.
+
+```{python}
+params = list(sk_fit.coef_) + [sk_fit.intercept_]
+params
+```
+
+If we just want all but the last parameter (all the coefficients, but not the intercept:
+
+```{python}
+params[:-1]
+```
+
+We could also get the parameters from Statsmodels, but we'd have to rearrange them, because Statsmodels puts the intercept first rather than last:
+
+```{python}
+sm_fit.params.iloc[[1, 2, 0]]
+```
+
+For convenience of variable names, we rename our regressors to `X`, and get
+the number of rows `n` and number of regressors `p`.
+
+
+```{python}
+X = clarity_easiness
+X = np.array(X)
+n, p = X.shape
+n, p
+```
+
+We then discussed how Sklearn and Statsmodels get their coefficients / parameters.   I was explaining that we can get them by direct calculation, that derives from calculus, in this simple "ordinary least squares" case.
+
+```{python}
+design = np.ones((n, 3))  # The design matrix.
+design[:, :2] = X  # Put the regressors into the design
+B = np.linalg.pinv(design) @ helpfulness
+B
+```
+
+Notice the parameters are the same as we saw above.
+
+We can extend this to any number of regressors:
+
+```{python}
+design = np.ones((n, 20))  # The design matrix.
+design[:, :19] = np.random.normal(size=(n, 19))
+B = np.linalg.pinv(design) @ helpfulness
+B
+```
+
+Write a function to compute the fitted values given the parameters:
+
+
+```{python}
+def calc_fitted(params, X):
+    """ Calculate fitted values from design X and parameters
+
+    Parameters
+    ----------
+    params : vector (1D array)
+        Vector of parameters, intercept is last parameter.
+    X : array
+        2D array with regressor columns.
+
+    Returns
+    -------
+    y_hat : vector
+        Vector of fitted values
+    """
+    X = np.array(X)
+    n, p = X.shape
+    y_hat = np.zeros(n)
+    for col_no, param in enumerate(params[:-1]):
+        y_hat = y_hat + param * X[:, col_no]  # Add contribution from this regressor.
+    y_hat = y_hat + params[-1]  # Add contribution from intercept.
+    return y_hat
+```
+
+Show that we get the same fitted values from our function as we got from the `predict` method of Sklearn:
+
+```{python}
+my_y_hat = calc_fitted(params, clarity_easiness)
+assert np.allclose(my_y_hat, y_hat)
+```
+
+Here I was showing you how `enumerate` works:
+
+```{python}
+for col_no in range(2):
+    print(col_no)
+```
+
+```{python}
+for param in params[:-1]:
+    print(param)
+```
+
+```{python}
+for col_no, param in enumerate(params[:-1]):
+    print(col_no, param)
+```
+
+Calculate the error vector and then calculate the sum of squared error:
+
+```{python}
+e = helpfulness - calc_fitted(params, X)
+np.sum(e ** 2)
+```
+
+Make a function to calculate sum of squared error:
+
+```{python}
+def sos(params, X, y):
+    """ Sum of squared error for `params` given model `X` and data `y`.
+    """
+    y_hat = calc_fitted(params, X)
+    e = y - y_hat  # residuals
+    return np.sum(e ** 2)
+```
+
+Check that we get the same answer from the function as we got from calculating above:
+
+```{python}
+sos(params, clarity_easiness, helpfulness)
+```
+
+Use `minimize` to find parameters minimizing the sum of squared error:
+
+```{python}
+min_res = minimize(sos, [0, 0, 0], args=(clarity_easiness, helpfulness))
+min_res
+```
+
+Yes, the parameters (coefficients and intercept) are the same as we got from Statsmodels and Sklearn:
+
+```{python}
+min_res.x
+```
+
+## The long and the short of $R^2$
+
+Sklearn has an `r2_score` metric.
+
+```{python}
+skmetrics.r2_score(helpfulness, y_hat)
+```
+
+We can also see the $R^2$ metric in the Statsmodels output.
+
+```{python}
+sm_fit.summary()
+```
+
+We already know the formula for R^2^.  We can calculate by hand to show this
+gives the same answer.
+
+For notational convenient, give our `y` vector the variable name `y`:
+
+```{python}
+y = helpfulness
+```
+
+Sum of squares around mean:
+
+```{python}
+# Dumb model.
+ss_mean = np.sum((y - np.mean(y)) ** 2)
+ss_mean
+```
+
+Sum of squares from full model:
+
+```{python}
+ss_model = np.sum((y - y_hat) ** 2)
+ss_model
+```
+
+Our by-hand calculation gives the same answer as Sklearn or Statsmodels:
+
+```{python}
+1 - ss_model / ss_mean
+```
+
+## On weights, and a weighted mean
+
+This is the usual mean:
+
+```{python}
+df.tail()
+```
+
+```{python}
+np.mean(y)
+```
+
+Of course this is the same as:
+
+```{python}
+np.sum(y) * 1 / n
+```
+
+In mathematical notation, we write this as:
+
+$$
+\bar{y} = \frac{1}{n} (y_1 + y_2 + ... + y_n) \\
+$$
+
+where $\bar{y}$ is the mean of the values in the vector $\vec{y}$.
+
+We could also write adding up the $y$ values with the $\sum$ notation, as in:
+
+$$
+\bar{y} = \frac{1}{n} \sum_i y_i
+$$
+
+
+Mathematically, we can also do the multiplication by $\frac{1}{n}$ *inside the brackets*, like this:
+
+
+$$
+\bar{y} = \frac{1}{n} y_1 +
+          \frac{1}{n} y_2 +
+          ...
+          \frac{1}{n} y_n + 
+$$
+
+With the $\sum$ notation, that would be:
+
+$$
+\bar{y} = \sum_i \frac{1}{n} y_i
+$$
+
+In code:
+
+```{python}
+np.sum(1 / n * y)
+```
+
+Think of this - the standard calculation of the mean - as giving each value in $y$ the same *weight* - of $\frac{1}{n}$:
+
+```{python}
+weights = np.ones(n) / n
+weights
+```
+
+```{python}
+np.sum(y * weights)
+```
+
+Calculate weights to weight values by number of professors, on the basis that larger number of professors may give more reliable values.
+
+```{python}
+n_professors = df['Number of Professors']
+n_professors
+```
+
+```{python}
+total_n_professors = np.sum(n_professors)
+total_n_professors
+```
+
+```{python}
+prop_professors_by_subject = n_professors / total_n_professors
+prop_professors_by_subject
+```
+
+```{python}
+np.sum(prop_professors_by_subject)
+```
+
+```{python}
+df.head()
+```
+
+Calculate weighted mean.
+
+```{python}
+# Weighted mean of helpfulness (y), weighted by number of professors.
+np.sum(y * prop_professors_by_subject)
+```
+
+Numpy's version of same:
+
+```{python}
+np.average(y, weights=n_professors)
+```
+
+## Fitting the model with minimize
+
+A function for Sum of Squares, to use with `minimize`.
+
+```{python}
+
+```
+
+Use `sos` function, in example call, and then with `minimize`.
+
+```{python}
+
+```
+
+```{python}
+
+```
+
+```{python}
+
+```
+
+Compare to parameters with (e.g.) Sklearn.
+
+```{python}
+
+```
+
+## Fitting with weights
+
+Statsmodels, weighted regression.
+
+```{python}
+sm_weighted_model = smf.wls('Helpfulness ~ Clarity + Easiness',
+                            weights=prop_professors_by_subject,
+                            data=df)
+sm_weighted_fit = sm_weighted_model.fit()
+sm_weighted_fit.summary()
+```
+
+[Sklearn, weighted
+regression](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LinearRegression.html).
+Also see [Wikipedia on weighted
+regression](https://en.wikipedia.org/wiki/Weighted_least_squares).
+
+```{python}
+sk_weighted = sklm.LinearRegression().fit(X, y, sample_weight=prop_professors_by_subject)
+sk_weighted
+```
+
+```{python}
+sk_weighted.coef_, sk_weighted.intercept_
+```
+
+The `minimize` cost function for weighted regression:
+
+```{python}
+def sos_weighted(params, X, y, weights):
+    """ Weighted least squares cost function
+    """
+    y_hat = calc_fitted(params, X)
+    e = y - y_hat  # residuals
+    e2 = e ** 2
+    return np.sum(e2 * weights)
+```
+
+```{python}
+weighted_res = minimize(sos_weighted, [0, 0, 0], args=(X, y, prop_professors_by_subject))
+weighted_res
+```
+
+```{python}
+weighted_res.x
+```
+
+```{python}
+
+```
+
+## Penalized regression
+
+Penalized regression is where you simultaneously minimize some cost related to the model (mis-)fit, and some cost related to the parameters of your model.
+
+### Ridge regression
+
+For example, in [ridge
+regression](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.Ridge.html),
+with try and minimize the sum of squared residuals _and_ the sum of squares
+of the parameters (apart from the intercept).
+
+```{python}
+sk_ridge = sklm.Ridge(alpha=1).fit(X, y)
+sk_ridge.coef_, sk_ridge.intercept_
+```
+
+```{python}
+def sos_ridge(params, X, y, alpha):
+    y_hat = calc_fitted(params, X)
+    e = y - y_hat  # residuals
+    sos_resid = np.sum(e ** 2)
+    return sos_resid + alpha * np.sum(params[:-1] ** 2)
+```
+
+```{python}
+res_ridge = minimize(sos_ridge, [0, 0, 0], args=(X, y, 1.0))
+res_ridge.x             
+```
+
+Fit with the `minimize` cost function:
+
+```{python}
+params = np.array([1, 2, 1, 5, 5])
+np.sum(params ** 2)
+```
+
+```{python}
+
+```
+
+### LASSO
+
+
+See the [Scikit-learn LASSO page](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.Lasso.html).
+
+As noted there, the cost function is:
+
+$$
+\frac{1}{2 * \text{n_samples}} * ||y - Xw||^2_2 + alpha * ||w||_1
+$$
+
+$w$ refers to the vector of model parameters.
+
+This part of the equation:
+
+$$
+||y - Xw||^2_2
+$$
+
+is the sum of squares of the residuals, because the residuals are $y - Xw$ (where $w$ are the parameters of the model), and the $||y - Xw||^2_2$ refers to the squared [L2 vector norm](https://mathworld.wolfram.com/L2-Norm.html), which is the same as the sum of squares.
+
+$$
+||w||_1
+$$
+
+is the L1 vector norm, which is the same as the sum of the absolute values of
+the parameters.
+
+Let's do that, with a low `alpha` (otherwise both slopes get forced down to zero):
+
+```{python}
+sk_lasso = sklm.LassoLars(alpha=0.01).fit(X, y)
+sk_lasso.coef_, sk_lasso.intercept_
+```
+
+```{python}
+
+```
+
+```{python}
+
+```
+
+```{python}
+
+```
+
+## Cross-validation
+
+Should I add the "Easiness" regressor?
+
+```{python}
+def drop_and_predict(df, x_cols, y_col, to_drop):
+    out_row = df.loc[to_drop:to_drop]  # Row to drop, as a data frame
+    out_df = df.drop(index=to_drop)  # Dataframe without dropped row.
+    # Fit on everything but the dropped row.
+    fit = sklm.LinearRegression().fit(out_df[x_cols], out_df[y_col])
+    # Use fit to predict the dropped row.
+    fitted = fit.predict(out_row[x_cols])
+    return fitted[0]
+```
+
+Fit the larger model, with "Easiness", and drop / predict each "Quality" value.
+
+```{python}
+
+```
+
+Calculate the sum of squared error:
+
+```{python}
+
+```
+
+Fit the smaller model, omitting "Easiness", and drop / predict each "Quality"
+value.
+
+```{python}
+
+```
+
+How is the sum of squared error for this reduced model?
+
+```{python}
+
+```
