@@ -317,8 +317,11 @@ $$
 \bar{y} = \frac{1}{n} \sum_i y_i
 $$
 
+```{python}
+1 / n * np.sum(y)
+```
 
-Mathematically, we can also do the multiplication by $\frac{1}{n}$ *inside the brackets*, like this:
+Mathematically, because $p * (q + r + s) = p * q + p * r + p * s$, we can also do the multiplication by $\frac{1}{n}$ *inside the brackets*, like this:
 
 
 $$
