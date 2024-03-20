@@ -1,0 +1,272 @@
+---
+jupyter:
+  jupytext:
+    notebook_metadata_filter: all,-language_info
+    split_at_heading: true
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.16.0
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+---
+
+# Galton's tables
+
+In which we introduce primary keys, and foreign keys.
+
+```{python}
+# Don't change this cell; just run it.
+import numpy as np  # The array library.
+import pandas as pd
+# Safe setting for Pandas.  Needs Pandas version >= 1.5.
+pd.set_option('mode.copy_on_write', True)
+
+import sqlalchemy as sa
+```
+
+Let's start with a database without keys.
+
+```{python}
+db_nk = sa.create_engine('sqlite:///galton_no_keys.db')
+db_nk
+```
+
+```{python}
+# Show all the table names in the database.
+inspector = sa.inspect(db_nk)
+print(inspector.get_table_names())
+```
+
+Families table:
+
+```{python}
+query = ''' 
+SELECT *
+FROM families;
+'''
+
+pd.read_sql(query, db_nk)
+```
+
+```{python}
+metadata_obj = sa.MetaData()
+metadata_obj.reflect(bind=db_nk)
+families_table_nk = metadata_obj.tables["families"]
+families_table_nk
+```
+
+Now we insert a new family:
+
+```{python}
+# Fake family
+fake_family = '99Z'
+insert_stmt = families_table_nk.insert().values(
+    family=fake_family, father=99, mother=99)
+
+# Run the insertion - no problem
+with db_nk.connect() as conn:
+    result = conn.execute(insert_stmt)
+    conn.commit()
+
+# Family appears at end.
+pd.read_sql('SELECT * FROM families;', db_nk).tail()
+```
+
+But - sadly - we can do the same again - with the same data:
+
+```{python}
+# Run the insertion - no problem
+with db_nk.connect() as conn:
+    result = conn.execute(insert_stmt)
+    conn.commit()
+
+# Both families appear at end.
+pd.read_sql('SELECT * FROM families;', db_nk).tail()
+```
+
+Clean up:
+
+```{python}
+# Delete all the fake families
+with db_nk.connect() as conn:
+    result = conn.execute(
+        families_table_nk.delete().where(
+            families_table_nk.c.family == fake_family)
+    )
+    conn.commit()
+```
+
+
+## With keys
+
+
+```{python}
+db = sa.create_engine('sqlite:///galton_keys.db')
+db
+```
+
+```{python}
+# Turn on foreign key checks.
+# https://stackoverflow.com/a/7831210/1939576
+def _fk_pragma_on_connect(dbapi_con, con_record):
+    dbapi_con.execute('pragma foreign_keys=ON')
+
+sa.event.listen(db, 'connect', _fk_pragma_on_connect)
+```
+
+```{python}
+# Show all the table names in the database.
+inspector = sa.inspect(db)
+print(inspector.get_table_names())
+```
+
+```{python}
+pd.read_sql('SELECT * FROM children;', db)
+```
+
+```{python}
+query = ''' 
+SELECT *
+FROM families;
+'''
+
+pd.read_sql('SELECT * FROM families;', db)
+```
+
+Just for practice, let's do a join.
+
+```{python}
+query = '''
+SELECT *
+FROM children
+INNER JOIN families
+ON children.family = families.family
+'''
+
+pd.read_sql(query, db)
+```
+
+About the families table.  Notice the difference from above.
+
+```{python}
+metadata_obj = sa.MetaData()
+metadata_obj.reflect(bind=db)
+families_table = metadata_obj.tables["families"]
+families_table
+```
+
+From above:
+
+```{python}
+families_table_nk
+```
+
+Insert the fake family again.
+
+
+```{python}
+# Fake family
+fake_family = '99Z'
+insert_stmt = families_table.insert().values(
+    family=fake_family, father=99, mother=99)
+```
+
+```{python}
+with db.connect() as conn:
+    result = conn.execute(insert_stmt)
+    conn.commit()
+```
+
+```{python}
+pd.read_sql('SELECT * FROM families;', db).tail()
+```
+
+But now if we try and insert a family with the same `family` value, there is an error:
+
+```{python tags=c("raises-exception")}
+# This generates an error because of the primary key.
+with db.connect() as conn:
+    result = conn.execute(
+        families_table.insert().values(
+            family=fake_family, father=100, mother=100))
+    conn.commit()
+```
+
+Now let's return to the children.
+
+```{python}
+pd.read_sql('SELECT * FROM children;', db).tail()
+```
+
+```{python}
+children_table = metadata_obj.tables["children"]
+children_table
+```
+
+```{python}
+fake_child = 1000
+with db.connect() as conn:
+    result = conn.execute(
+        children_table.insert().values(
+            child_id=fake_child,
+            child_number=1,
+            gender='female',
+            height=58.0,
+            family=fake_family,
+        ))
+    conn.commit()
+```
+
+```{python}
+pd.read_sql('SELECT * FROM children;', db).tail()
+```
+
+```{python tags=c("raises-exception")}
+# Integrity error for not-existing family.
+with db.connect() as conn:
+    result = conn.execute(
+        children_table.insert().values(
+            child_id=1002,
+            child_number=1,
+            gender='female',
+            height=58.0,
+            family='1000Z'  # Not existing family
+        ))
+    conn.commit()
+```
+
+```{python tags=c("raises-exception")}
+# If we try to delete the fake family, the system sees the problem.
+with db.connect() as conn:
+    result = conn.execute(
+        families_table.delete().where(
+            families_table.c.family == fake_family)
+    )
+    conn.commit()
+```
+
+```{python}
+# Delete fake child first (referencing the fake family).
+with db.connect() as conn:
+    result = conn.execute(
+        children_table.delete().where(
+            children_table.c.child_id == fake_child)
+    )
+    conn.commit()
+```
+
+Then delete the fake family.
+
+```{python tags=c("raises-exception")}
+# If we try to delete the fake family, the system sees the problem.
+with db.connect() as conn:
+    result = conn.execute(
+        families_table.delete().where(
+            families_table.c.family == fake_family)
+    )
+    conn.commit()
+```
